@@ -1,0 +1,16 @@
+######
+# This file is used to configure upstream directives for external services.
+#
+# The main advantage of using upstream is to define a group of servers than can listen on different ports and configure load-balancing and failover between them.
+# If you are only defining 1 primary server per upstream so it must to be up.
+# In that case, use variables for your proxy_pass(es) and remember to handle the possible errors (404s, 503s) that you might get when a target server is down.
+#
+# @see http://nginx.org/en/docs/http/ngx_http_upstream_module.html#upstream
+# example
+#upstream demo-services {
+#    server service1a.domain.net:80;
+#    server service1b.domain.net:80;
+#    server service1c.domain.net:80;
+#}
+
+

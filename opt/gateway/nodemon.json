@@ -1,0 +1,6 @@
+{
+  "verbose": true,
+  "events": {
+    "restart": "/usr/local/nginx/sbin/nginx -s stop"
+  }
+}

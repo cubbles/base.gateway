@@ -1,0 +1,201 @@
+    ##############
+    # Authentication API
+    # purpose: verify credentials and (in case of success) create the 'acccess_token'
+    location ~ ^/_api/authenticate/?$ {
+        # limit access
+        limit_except GET HEAD POST OPTIONS {
+            deny  all;
+        }
+
+        rewrite ^/_api/authenticate/?(.*)$ /$1 break;
+        proxy_pass http://authentication:3000;
+
+        # The next statement passes the $auth_secret to the authentication-service.
+        # ... this makes sure, the same secret will be used to sign and to verify the access_token.
+        proxy_set_header X-Cubx-AuthSecret $auth_secret;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    ##############
+    # UserProfileManagament API
+    # purpose: for users to manage their own profiles
+    location ~ ^/_api/manageprofile/users {
+        # limit access
+        limit_except GET HEAD PUT OPTIONS {
+            deny  all;
+        }
+
+        rewrite ^/_api/manageprofile/?(.*)$ /$1 break;
+        proxy_pass http://userprofilemanagement:3000;
+
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+
+    ##############
+    # Store Info
+    # purpose: show named store infos
+    # - couchdb-api details see http://docs.couchdb.org/en/1.6.1/http-api.html
+    location ~ ^/[a-z0-9-]+/?$ {
+        # cors related config
+        add_header Access-Control-Allow-Headers "X-Requested-With";
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+        add_header Access-Control-Allow-Origin "*";
+
+        # authentication
+        limit_except GET HEAD {
+            deny  all;
+        }
+
+        # proxy target
+        rewrite ^/(.*)$ /webpackage-store-$1 break;
+        proxy_pass http://coredatastore:5984;
+
+        # base64 encoded credentials (used https://www.base64encode.org/)
+        proxy_set_header Authorization ''; # prevent nginx from forwarding received authorization values
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    ##############
+    # Download Webpackage Resources
+    # purpose: allow webpackages access on a named store
+    # - couchdb-api details see http://docs.couchdb.org/en/1.6.1/http-api.html
+    location ~ ^/[a-z0-9-]+/(_design|[a-z0-9]+)+ {
+        # cors related config
+        add_header Access-Control-Allow-Headers "X-Requested-With";
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+        add_header Access-Control-Allow-Origin "*";
+
+        limit_except GET HEAD {
+            deny  all;
+        }
+
+        if ($uri ~ "@[0-9-\.]+-SNAPSHOT/(.)+" ) {
+            expires 1m;
+        }
+        if ($uri ~ "@[0-9-\.]+/(.)+" ) {
+            expires max;
+        }
+
+        # proxy target
+        rewrite ^/(.*)$ /webpackage-store-$1 break;
+        proxy_pass http://coredatastore:5984;
+
+        # base64 encoded credentials (used https://www.base64encode.org/)
+        proxy_set_header Authorization ''; # prevent nginx from forwarding received authorization values
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    ##############
+    # Upload Webpackages
+    # purpose: allow webpackage upload into a named store
+    # - couchdb-api details
+    #   see http://docs.couchdb.org/en/1.6.1/http-api.html
+    #   see https://wiki.apache.org/couchdb/HTTP_Document_API#Multiple_Attachments
+    location ~ /[a-z0-9-]+/(_api/upload) {
+        client_max_body_size 5m;
+
+        # CORS related config (esp. for development purposes, where your application is served e.g. from localhost)
+        add_header 'Access-Control-Allow-Origin' '*';
+        add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization';
+        add_header 'Access-Control-Allow-Methods' 'GET, HEAD, OPTIONS, POST, PUT';
+
+        # The handling of OPTIONS request is included esp. for cross-domain usage of XMLHttpRequest
+        # @see https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS#Preflighted_requests
+        # CORS related config (esp. for development purposes, where your application is served e.g. from localhost)
+        if ($request_method = OPTIONS ) {
+            # test instructions:
+            # $ curl -X OPTIONS http://cubbles-base-dev/{store}/_api/upload/000-uploadtest -v
+            # the response should return the 'Access-Control-Allow-*' -Headers
+
+            # Important: You need to set the headers here again - because of the behaviour of the if-directive
+            #   @see http://wiki.nginx.org/IfIsEvil
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Headers' 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization';
+            add_header 'Access-Control-Allow-Methods' 'GET, HEAD, OPTIONS, POST, PUT';
+            #
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain charset=UTF-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+
+        # authentication
+        set $user "";
+        set $roles "";
+        access_by_lua_file /opt/gateway/lua/base-upload-guard.lua;
+
+        # proxy target
+        rewrite ^/([a-z0-9-]+)/_api/upload(.*)$ /webpackage-store-$1$2 break;
+        proxy_pass http://coredatastore:5984;
+        #proxy_redirect http://coredatastore:5984/ https://$host:$server_port/bla/;
+        proxy_redirect ~*^(.+)(/webpackage-store-)(.+)$     $scheme://$host/$3;
+
+        # base64 encoded credentials (used https://www.base64encode.org/)
+        proxy_set_header Authorization ''; # prevent nginx from forwarding received authorization values
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Auth-CouchDB-UserName $user;
+        proxy_set_header X-Auth-CouchDB-Roles $roles;
+    }
+
+    ##############
+    # Replicate From Store 1 (checkpoint access)
+    # purpose: allow storing of replication checkpoints within the source database
+    # @see http://docs.couchdb.org/en/1.6.1/replication/protocol.html#record-replication-checkpoint
+    location ~ ^/[a-z0-9-]+/_api/replicate/_local/ {
+        # To avoid a denial-of-service attack by writing an endless number of _local documents,
+        #  limit the average access rate to this location per client.
+        # @see http://nginx.org/en/docs/http/ngx_http_limit_req_module.html#limit_req
+        limit_req zone=perclient_replication_checkpoints burst=2;
+
+        limit_except GET HEAD PUT {
+            deny  all;
+        }
+
+        # proxy target
+        rewrite ^/([a-z0-9-]+)/_api/replicate/_local/(.*)$ /webpackage-store-$1/_local/$2 break;
+        proxy_pass http://coredatastore:5984;
+
+        proxy_redirect off;
+        proxy_buffering off;
+        proxy_set_header Authorization ''; # prevent nginx from forwarding received authorization values
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    ##############
+    # Replicate From Store 2
+    # purpose: allow replication of the database
+    # - couchdb-api details see http://docs.couchdb.org/en/1.6.1/http-api.html
+    location ~ ^/[a-z0-9-]+/_api/replicate {
+
+        # authentication
+        # auth_basic "Restricted";
+        # auth_basic_user_file /opt/gateway/conf.d/_replicate-htpasswd;
+
+        limit_except GET HEAD POST {
+            deny all;
+        }
+
+        # proxy target
+        if ($request_method ~ "(GET|HEAD)") {
+            rewrite ^/([a-z0-9-]+)/_api/replicate/?$ /webpackage-store-$1 break;
+            rewrite ^/([a-z0-9-]+)/_api/replicate/_changes$ /webpackage-store-$1/_changes break;
+            rewrite ^/([a-z0-9-]+)/_api/replicate(/.*)$ /webpackage-store-$1$2 break;
+        }
+        if ($request_method = POST) {
+            rewrite ^/([a-z0-9-]+)/_api/replicate/_ensure_full_commit$ /webpackage-store-$1/_ensure_full_commit break;
+        }
+        proxy_pass http://coredatastore:5984;
+
+        proxy_redirect off;
+        proxy_buffering off;
+        proxy_set_header Authorization ''; # prevent nginx from forwarding received authorization values
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }

@@ -1,0 +1,57 @@
+    ######
+    # This file is used to configure proxy-locations for external services.
+    # Doing so you can e.g.
+    # * configure credentials to access secured external services
+    # * provide additional response headers (Acess-Control)
+    # * control access to external service
+    #
+    # Please take care
+    # * to not get in conflict with configurations in '../base.conf'
+    # * to name additional files following the pattern 'proxy_(*).location'
+
+    ####
+    # Wikipedia Search API
+    # example:
+    #  http://cubbles-base-dev/_proxy/de.wikipedia.org/w/api.php?action=query&format=json&&list=search&srsearch=Albert%20Einstein
+    location /_proxy/de.wikipedia.org/w/api.php {
+
+        # cors related config
+        add_header Access-Control-Allow-Headers "X-Requested-With";
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+        add_header Access-Control-Allow-Origin "*";
+
+        # define the upstream as a variable
+        # use the docker embedded DNS server at 127.0.0.11
+        # this will allow nginx to start/run also if the upstream-server is not available
+        resolver 127.0.0.11 valid=30s;
+        set $upstream_wikipedia de.wikipedia.org/w/api.php;
+        proxy_pass http://$upstream_wikipedia;
+
+        proxy_redirect off;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+
+    ##############
+    # proxy to demo-services
+    location ~ ^/_proxy/demo-services/? {
+
+        # cors related config
+        add_header Access-Control-Allow-Headers "X-Requested-With";
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+        add_header Access-Control-Allow-Origin "*";
+
+        # define the upstream as a variable
+        # use the docker embedded DNS server at 127.0.0.11
+        # this will allow nginx to start/run also if the upstream-server is not available
+        resolver 127.0.0.11 valid=30s;
+        set $upstream_demo demo-services.gateway:80;
+
+        rewrite ^/_proxy/demo-services(.*)$ $1 break;
+        proxy_pass http://$upstream_demo;
+
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
